@@ -21,14 +21,14 @@ import { EffectNode } from "./effect";
  *
  * Message types:
  *
- *   expose    — One side announces a node (signal or computed) and
+ *   expose    — One side announces a node (pulse or computed) and
  *               its current value. The other side creates a local
  *               proxy that mirrors it.
  *
  *   update    — A node's value has changed. The receiving side
  *               updates its local proxy.
  *
- *   set       — A remote signal's set() was called from the other
+ *   set       — A remote pulse's set() was called from the other
  *               side. The owning side applies the write and
  *               propagates normally.
  *
@@ -46,7 +46,7 @@ export type BridgeMessage =
     type: "expose";
     id: string;
     value: any;
-    kind: "signal" | "computed";
+    kind: "pulse" | "computed";
     version: number;
   }
   | { type: "update"; id: string; value: any; version: number }
@@ -58,27 +58,27 @@ export type BridgeMessage =
   | { type: "pong"; timestamp: number };
 
 // #################################
-// RemoteSignal
+// Remotepulse
 // #################################
 
 /**
- * RemoteSignal
+ * Remotepulse
  * ------------
  *
- * A local proxy for a SignalNode that lives on another runtime.
+ * A local proxy for a pulseNode that lives on another runtime.
  *
  * Reads (get()) return the locally cached value, which is kept
  * in sync via 'update' messages from the owning side.
  *
  * Writes (set()) send a 'set' message to the owning side, which
- * applies the write to the real signal and propagates the change
+ * applies the write to the real pulse and propagates the change
  * back via an 'update' message. This ensures the owning side is
  * always the source of truth.
  *
- * RemoteSignal extends SignalNode so it can be used anywhere a
- * regular signal is expected — in computed nodes, effects, and
+ * Remotepulse extends pulseNode so it can be used anywhere a
+ * regular pulse is expected — in computed nodes, effects, and
  * React hooks. The reactive graph on this side sees it as a normal
- * signal; the cross-runtime synchronization is transparent.
+ * pulse; the cross-runtime synchronization is transparent.
  */
 export class RemotePulse<T> extends PulseNode<T> {
   /** The bridge that owns this proxy. */
@@ -97,7 +97,7 @@ export class RemotePulse<T> extends PulseNode<T> {
   }
 
   /**
-   * Overrides SignalNode.set() to send the write to the remote side.
+   * Overrides pulseNode.set() to send the write to the remote side.
    *
    * The local value is NOT updated here — it will be updated when
    * the remote sends back an 'update' message confirming the change.
@@ -110,7 +110,7 @@ export class RemotePulse<T> extends PulseNode<T> {
    */
   override set(next: T) {
     if (!this.connected) {
-      throw new Error(`RemoteSignal '${this.remoteId}' is disconnected`);
+      throw new Error(`Remotepulse '${this.remoteId}' is disconnected`);
     }
 
     this.bridge.send({
@@ -175,11 +175,11 @@ export class RemotePulse<T> extends PulseNode<T> {
  * A local proxy for a ComputedNode that lives on another runtime.
  *
  * Unlike a regular ComputedNode which has a function that recomputes
- * locally, a RemoteComputed is backed by a SignalNode that mirrors
+ * locally, a RemoteComputed is backed by a pulseNode that mirrors
  * the remote computed's value via 'update' messages.
  *
  * From the local graph's perspective, it behaves like a read-only
- * signal — it can be read in computed nodes and effects, and triggers
+ * pulse — it can be read in computed nodes and effects, and triggers
  * reactivity when the remote value changes.
  *
  * The computation itself runs on the remote side (possibly in a Web
@@ -194,13 +194,13 @@ export class RemoteComputed<T> {
   readonly remoteId: string;
 
   /**
-   * Internal signal that stores the mirrored value.
+   * Internal pulse that stores the mirrored value.
    *
-   * Using a SignalNode (rather than a raw value) means the remote
+   * Using a pulseNode (rather than a raw value) means the remote
    * computed participates in the local reactive graph automatically.
    * Any local effects or computeds that call get() are tracked.
    */
-  readonly signal: PulseNode<T>;
+  readonly pulse: PulseNode<T>;
 
   /** Whether this proxy is still connected to the remote. */
   connected = true;
@@ -208,7 +208,7 @@ export class RemoteComputed<T> {
   constructor(bridge: GraphBridge, id: string, initialValue: T) {
     this.bridge = bridge;
     this.remoteId = id;
-    this.signal = new PulseNode(initialValue);
+    this.pulse = new PulseNode(initialValue);
   }
 
   /**
@@ -221,14 +221,14 @@ export class RemoteComputed<T> {
    * changes.
    */
   get(): T {
-    return this.signal.get();
+    return this.pulse.get();
   }
 
   /**
    * Called by the bridge when an 'update' message arrives.
    */
   _receiveUpdate(value: T) {
-    this.signal.set(value);
+    this.pulse.set(value);
   }
 
   /**
@@ -236,7 +236,7 @@ export class RemoteComputed<T> {
    */
   _disconnect() {
     this.connected = false;
-    this.signal.observers.length = 0;
+    this.pulse.observers.length = 0;
   }
 }
 
@@ -253,10 +253,10 @@ export class RemoteComputed<T> {
  *
  * The bridge has two roles:
  *
- *   Exposing: Making a local signal or computed visible to the remote
+ *   Exposing: Making a local pulse or computed visible to the remote
  *   side. The bridge watches for changes and sends 'update' messages.
  *
- *   Proxying: Creating local RemoteSignal / RemoteComputed instances
+ *   Proxying: Creating local Remotepulse / RemoteComputed instances
  *   that mirror nodes exposed by the remote side.
  *
  * Typical setup:
@@ -267,7 +267,7 @@ export class RemoteComputed<T> {
  *   worker.postMessage({ port: channel.port2 }, [channel.port2])
  *
  *   const bridge = new GraphBridge(channel.port1)
- *   bridge.expose('count', countSignal)
+ *   bridge.expose('count', countpulse)
  *
  *   const result = bridge.proxyComputed<number>('expensiveResult')
  *   new EffectNode(() => {
@@ -277,7 +277,7 @@ export class RemoteComputed<T> {
  *   // Worker
  *   self.onmessage = (e) => {
  *     const bridge = new GraphBridge(e.data.port)
- *     const count = bridge.proxySignal<number>('count')
+ *     const count = bridge.proxypulse<number>('count')
  *
  *     const expensive = new ComputedNode(() => {
  *       return heavyComputation(count.get())
@@ -335,7 +335,7 @@ export class GraphBridge {
     string,
     {
       resolve: (proxy: RemotePulse<any> | RemoteComputed<any>) => void;
-      kind: "signal" | "computed";
+      kind: "pulse" | "computed";
     }[]
   > = new Map();
 
@@ -355,11 +355,11 @@ export class GraphBridge {
    * 'update' messages whenever the value changes. The initial value
    * is sent immediately via an 'expose' message.
    *
-   * For signals, the remote side can call set() which sends a 'set'
-   * message back, and this side applies the write to the real signal.
+   * For pulses, the remote side can call set() which sends a 'set'
+   * message back, and this side applies the write to the real pulse.
    *
    * @param id   - A unique string identifier for this node.
-   * @param node - The signal or computed to expose.
+   * @param node - The pulse or computed to expose.
    */
   expose(id: string, node: PulseNode<any> | ComputedNode<any>): void {
     if (!this.active) {
@@ -370,12 +370,12 @@ export class GraphBridge {
       throw new Error(`Node '${id}' is already exposed on this bridge`);
     }
 
-    const isSignal = node instanceof PulseNode;
-    const kind: "signal" | "computed" = isSignal ? "signal" : "computed";
+    const ispulse = node instanceof PulseNode;
+    const kind: "pulse" | "computed" = ispulse ? "pulse" : "computed";
 
     // Get the current value.
-    const value = isSignal ? node.value : (node as ComputedNode<any>).get();
-    let version = isSignal ? node.version : 0;
+    const value = ispulse ? node.value : (node as ComputedNode<any>).get();
+    let version = ispulse ? node.version : 0;
 
     // Send the initial expose message.
     this.send({
@@ -392,7 +392,7 @@ export class GraphBridge {
     // "expose" message above already carries the initial value.
     let firstRun = true;
     const effect = new EffectNode(() => {
-      const currentValue = isSignal
+      const currentValue = ispulse
         ? (node as PulseNode<any>).get()
         : (node as ComputedNode<any>).get();
 
@@ -404,7 +404,7 @@ export class GraphBridge {
         return;
       }
 
-      const currentVersion = isSignal
+      const currentVersion = ispulse
         ? (node as PulseNode<any>).version
         : ++version;
 
@@ -421,9 +421,9 @@ export class GraphBridge {
   }
 
   /**
-   * proxySignal()
+   * proxypulse()
    *
-   * Creates a local RemoteSignal that mirrors a signal exposed by
+   * Creates a local Remotepulse that mirrors a pulse exposed by
    * the remote side.
    *
    * If the remote has already sent an 'expose' message for this id,
@@ -433,9 +433,9 @@ export class GraphBridge {
    *
    * @param id           - The id used by the remote's expose() call.
    * @param defaultValue - Initial value before the remote responds.
-   * @returns A RemoteSignal that can be used like a regular signal.
+   * @returns A Remotepulse that can be used like a regular pulse.
    */
-  proxySignal<T>(id: string, defaultValue?: T): RemotePulse<T> {
+  proxypulse<T>(id: string, defaultValue?: T): RemotePulse<T> {
     if (this.proxies.has(id)) {
       return this.proxies.get(id) as RemotePulse<T>;
     }
@@ -485,14 +485,14 @@ export class GraphBridge {
    * the remote side is not guaranteed.
    *
    * @param id   - The id to wait for.
-   * @param kind - Whether to expect a signal or computed.
+   * @param kind - Whether to expect a pulse or computed.
    * @returns A promise that resolves with the proxy.
    */
-  awaitProxy<T>(id: string, kind: "signal"): Promise<RemotePulse<T>>;
+  awaitProxy<T>(id: string, kind: "pulse"): Promise<RemotePulse<T>>;
   awaitProxy<T>(id: string, kind: "computed"): Promise<RemoteComputed<T>>;
   awaitProxy<T>(
     id: string,
-    kind: "signal" | "computed",
+    kind: "pulse" | "computed",
   ): Promise<RemotePulse<T> | RemoteComputed<T>> {
     // If already proxied, resolve immediately.
     if (this.proxies.has(id)) {
@@ -515,7 +515,7 @@ export class GraphBridge {
    *
    * Sends a message to the remote side.
    *
-   * Public so that RemoteSignal can call it for 'set' messages.
+   * Public so that Remotepulse can call it for 'set' messages.
    * All other code should go through the higher-level API.
    */
   send(msg: BridgeMessage): void {
@@ -611,14 +611,14 @@ export class GraphBridge {
 
         if (!proxy) {
           // Create proxy based on kind.
-          if (msg.kind === "signal") {
+          if (msg.kind === "pulse") {
             proxy = new RemotePulse(this, msg.id, msg.value);
           } else {
             proxy = new RemoteComputed(this, msg.id, msg.value);
           }
           this.proxies.set(msg.id, proxy);
         } else {
-          // Proxy already exists (created by proxySignal/proxyComputed).
+          // Proxy already exists (created by proxypulse/proxyComputed).
           // Update its value.
           proxy._receiveUpdate(msg.value);
         }
@@ -644,7 +644,7 @@ export class GraphBridge {
       }
 
       case "set": {
-        // Remote is requesting a write to one of our exposed signals.
+        // Remote is requesting a write to one of our exposed pulses.
         const entry = this.exposed.get(msg.id);
         if (entry && entry.node instanceof PulseNode) {
           entry.node.set(msg.value);
@@ -656,8 +656,8 @@ export class GraphBridge {
         // Remote wants updates for one of our exposed nodes.
         const entry = this.exposed.get(msg.id);
         if (entry) {
-          const isSignal = entry.node instanceof PulseNode;
-          const value = isSignal
+          const ispulse = entry.node instanceof PulseNode;
+          const value = ispulse
             ? (entry.node as PulseNode<any>).value
             : (entry.node as ComputedNode<any>).get();
 
@@ -665,7 +665,7 @@ export class GraphBridge {
             type: "expose",
             id: msg.id,
             value,
-            kind: isSignal ? "signal" : "computed",
+            kind: ispulse ? "pulse" : "computed",
             version: entry.version,
           });
         }
@@ -716,7 +716,7 @@ export class GraphBridge {
  * Usage (in worker.ts):
  *
  *   createWorkerBridge((bridge) => {
- *     const count = bridge.proxySignal<number>('count')
+ *     const count = bridge.proxypulse<number>('count')
  *
  *     const expensive = new ComputedNode(() => {
  *       return heavyComputation(count.get())
@@ -751,7 +751,7 @@ export function createWorkerBridge(setup: (bridge: GraphBridge) => void): void {
  *   const worker = new Worker('worker.js')
  *   const bridge = connectWorker(worker)
  *
- *   bridge.expose('count', countSignal)
+ *   bridge.expose('count', countpulse)
  *   const result = bridge.proxyComputed<number>('result')
  *
  * @param worker - The Web Worker to connect to.
