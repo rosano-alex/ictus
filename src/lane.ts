@@ -5,9 +5,9 @@ import type { ComputedNode } from "./computed";
 import { activeObserver, setObserver } from "./context";
 import { Scope, activeScope } from "./scope";
 
-// +++++++++++++++++++++++++++++++++++++++
+// #################################
 // Lane types
-// +++++++++++++++++++++++++++++++++++++++
+// #################################
 
 /**
  * Priority levels for concurrent lanes.
